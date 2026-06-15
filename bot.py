@@ -49,7 +49,6 @@ def obter_cargo_usuario(member):
     """Obtém o cargo principal do usuário"""
     if not member.roles:
         return "Sem cargo"
-    # Retorna o cargo mais alto (ignorando @everyone)
     for role in reversed(member.roles):
         if role.name != "@everyone":
             return role.name
@@ -68,6 +67,125 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
+# ===== VIEWS (BOTÕES) =====
+class BaterPontoView(discord.ui.View):
+    def __init__(self, ctx):
+        super().__init__()
+        self.ctx = ctx
+        self.timeout = 300  # 5 minutos
+
+    @discord.ui.button(label="✅ BATER PONTO", style=discord.ButtonStyle.green)
+    async def bater_ponto_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Verificar se quem clicou é o mesmo que pediu
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("❌ Apenas quem pediu pode usar este botão!", ephemeral=True)
+            return
+
+        user_id = str(interaction.user.id)
+        user_name = interaction.user.name
+        cargo = obter_cargo_usuario(interaction.user)
+        emoji_cargo = obter_emoji_cargo(cargo)
+        horario = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
+        
+        dados = carregar_dados()
+        
+        if user_id not in dados:
+            dados[user_id] = {
+                'nome': user_name,
+                'cargo': cargo,
+                'registros': []
+            }
+        else:
+            dados[user_id]['cargo'] = cargo
+        
+        registros = dados[user_id]['registros']
+        if registros and registros[-1].get('saida') is None:
+            embed = discord.Embed(
+                title='❌ Erro',
+                description=f'{interaction.user.mention}, você já está em serviço!\nUse o botão "SAIR DO SERVIÇO" para sair.',
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        dados[user_id]['registros'].append({
+            'entrada': horario,
+            'saida': None
+        })
+        
+        salvar_dados(dados)
+        
+        embed = discord.Embed(
+            title=f'✅ Entrada Registrada {emoji_cargo}',
+            description=f'{interaction.user.mention} entrou em serviço',
+            color=obter_cor_cargo(cargo)
+        )
+        embed.add_field(name='🕐 Horário', value=horario, inline=False)
+        embed.add_field(name='👤 Usuário', value=interaction.user.name, inline=True)
+        embed.add_field(name=f'{emoji_cargo} Cargo', value=cargo, inline=True)
+        
+        await interaction.response.send_message(embed=embed)
+
+    @discord.ui.button(label="❌ SAIR DO SERVIÇO", style=discord.ButtonStyle.red)
+    async def sair_servico_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Verificar se quem clicou é o mesmo que pediu
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("❌ Apenas quem pediu pode usar este botão!", ephemeral=True)
+            return
+
+        user_id = str(interaction.user.id)
+        cargo = obter_cargo_usuario(interaction.user)
+        emoji_cargo = obter_emoji_cargo(cargo)
+        horario = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
+        
+        dados = carregar_dados()
+        
+        if user_id not in dados or not dados[user_id]['registros']:
+            embed = discord.Embed(
+                title='❌ Erro',
+                description=f'{interaction.user.mention}, você não está em serviço!\nUse o botão "BATER PONTO" para entrar.',
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        if dados[user_id]['registros'][-1].get('saida') is not None:
+            embed = discord.Embed(
+                title='❌ Erro',
+                description=f'{interaction.user.mention}, você já saiu de serviço!',
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        entrada = dados[user_id]['registros'][-1]['entrada']
+        dados[user_id]['registros'][-1]['saida'] = horario
+        dados[user_id]['cargo'] = cargo
+        
+        salvar_dados(dados)
+        
+        try:
+            entrada_dt = datetime.strptime(entrada, '%d/%m/%Y %H:%M:%S')
+            saida_dt = datetime.strptime(horario, '%d/%m/%Y %H:%M:%S')
+            duracao = saida_dt - entrada_dt
+            horas = duracao.seconds // 3600
+            minutos = (duracao.seconds % 3600) // 60
+        except:
+            horas = 0
+            minutos = 0
+
+        embed = discord.Embed(
+            title=f'✅ Saída Registrada {emoji_cargo}',
+            description=f'{interaction.user.mention} saiu de serviço',
+            color=obter_cor_cargo(cargo)
+        )
+        embed.add_field(name='⏱️ Entrada', value=entrada, inline=True)
+        embed.add_field(name='⏹️ Saída', value=horario, inline=True)
+        embed.add_field(name='⏳ Tempo de Serviço', value=f'{horas}h {minutos}min', inline=False)
+        embed.add_field(name=f'{emoji_cargo} Cargo', value=cargo, inline=False)
+        
+        await interaction.response.send_message(embed=embed)
+
 # ===== EVENTOS =====
 @bot.event
 async def on_ready():
@@ -77,115 +195,33 @@ async def on_ready():
 # ===== COMANDOS DE BATE-PONTO =====
 @bot.command(name='bater_ponto')
 async def bater_ponto(ctx):
-    """Registra entrada em serviço"""
-    user_id = str(ctx.author.id)
-    user_name = ctx.author.name
-    cargo = obter_cargo_usuario(ctx.author)
-    emoji_cargo = obter_emoji_cargo(cargo)
-    horario = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
-    
-    dados = carregar_dados()
-    
-    if user_id not in dados:
-        dados[user_id] = {
-            'nome': user_name,
-            'cargo': cargo,
-            'registros': []
-        }
-    else:
-        # Atualiza cargo
-        dados[user_id]['cargo'] = cargo
-    
-    # Verifica se já bateu ponto sem sair
-    registros = dados[user_id]['registros']
-    if registros and registros[-1].get('saida') is None:
-        embed = discord.Embed(
-            title='❌ Erro',
-            description=f'{ctx.author.mention}, você já está em serviço!\nUse `!sair_servico` para sair.',
-            color=discord.Color.red()
-        )
-        await ctx.send(embed=embed)
-        return
-    
-    # Adiciona novo registro de entrada
-    dados[user_id]['registros'].append({
-        'entrada': horario,
-        'saida': None
-    })
-    
-    salvar_dados(dados)
+    """Mostra botões para bater ponto ou sair de serviço"""
+    view = BaterPontoView(ctx)
     
     embed = discord.Embed(
-        title=f'✅ Entrada Registrada {emoji_cargo}',
-        description=f'{ctx.author.mention} entrou em serviço',
-        color=obter_cor_cargo(cargo)
+        title='🕐 Bate-Ponto',
+        description='Escolha uma ação:',
+        color=discord.Color.blue()
     )
-    embed.add_field(name='🕐 Horário', value=horario, inline=False)
-    embed.add_field(name='👤 Usuário', value=ctx.author.name, inline=True)
-    embed.add_field(name=f'{emoji_cargo} Cargo', value=cargo, inline=True)
+    embed.add_field(name='✅ BATER PONTO', value='Clique para entrar em serviço', inline=False)
+    embed.add_field(name='❌ SAIR DO SERVIÇO', value='Clique para sair de serviço', inline=False)
     
-    await ctx.send(embed=embed)
+    await ctx.send(embed=embed, view=view)
 
 @bot.command(name='sair_servico')
 async def sair_servico(ctx):
-    """Registra saída de serviço"""
-    user_id = str(ctx.author.id)
-    cargo = obter_cargo_usuario(ctx.author)
-    emoji_cargo = obter_emoji_cargo(cargo)
-    horario = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
+    """Alias para o comando bater_ponto (mostra botões)"""
+    view = BaterPontoView(ctx)
     
-    dados = carregar_dados()
-    
-    if user_id not in dados or not dados[user_id]['registros']:
-        embed = discord.Embed(
-            title='❌ Erro',
-            description=f'{ctx.author.mention}, você não está em serviço!\nUse `!bater_ponto` para entrar.',
-            color=discord.Color.red()
-        )
-        await ctx.send(embed=embed)
-        return
-    
-    # Verifica se já saiu
-    if dados[user_id]['registros'][-1].get('saida') is not None:
-        embed = discord.Embed(
-            title='❌ Erro',
-            description=f'{ctx.author.mention}, você já saiu de serviço!',
-            color=discord.Color.red()
-        )
-        await ctx.send(embed=embed)
-        return
-    
-    # Registra saída
-    entrada = dados[user_id]['registros'][-1]['entrada']
-    dados[user_id]['registros'][-1]['saida'] = horario
-    
-    # Atualiza cargo
-    dados[user_id]['cargo'] = cargo
-    
-    salvar_dados(dados)
-    
-    # Calcula tempo de serviço
-    try:
-        entrada_dt = datetime.strptime(entrada, '%d/%m/%Y %H:%M:%S')
-        saida_dt = datetime.strptime(horario, '%d/%m/%Y %H:%M:%S')
-        duracao = saida_dt - entrada_dt
-        horas = duracao.seconds // 3600
-        minutos = (duracao.seconds % 3600) // 60
-    except:
-        horas = 0
-        minutos = 0
-
     embed = discord.Embed(
-        title=f'✅ Saída Registrada {emoji_cargo}',
-        description=f'{ctx.author.mention} saiu de serviço',
-        color=obter_cor_cargo(cargo)
+        title='🕐 Bate-Ponto',
+        description='Escolha uma ação:',
+        color=discord.Color.blue()
     )
-    embed.add_field(name='⏱️ Entrada', value=entrada, inline=True)
-    embed.add_field(name='⏹️ Saída', value=horario, inline=True)
-    embed.add_field(name='⏳ Tempo de Serviço', value=f'{horas}h {minutos}min', inline=False)
-    embed.add_field(name=f'{emoji_cargo} Cargo', value=cargo, inline=False)
+    embed.add_field(name='✅ BATER PONTO', value='Clique para entrar em serviço', inline=False)
+    embed.add_field(name='❌ SAIR DO SERVIÇO', value='Clique para sair de serviço', inline=False)
     
-    await ctx.send(embed=embed)
+    await ctx.send(embed=embed, view=view)
 
 @bot.command(name='meu_bate_ponto')
 async def meu_bate_ponto(ctx):
@@ -213,11 +249,10 @@ async def meu_bate_ponto(ctx):
         color=obter_cor_cargo(cargo)
     )
     
-    for i, reg in enumerate(registros[-10:], 1):  # Últimos 10 registros
+    for i, reg in enumerate(registros[-10:], 1):
         entrada = reg['entrada']
         saida = reg['saida'] if reg['saida'] else '⏳ Em serviço'
         
-        # Calcula duração se tiver saída
         if reg['saida']:
             try:
                 entrada_dt = datetime.strptime(entrada, '%d/%m/%Y %H:%M:%S')
@@ -259,7 +294,6 @@ async def relatorio_ponto(ctx):
         color=discord.Color.purple()
     )
     
-    # Ordena por hierarquia
     usuarios_ordenados = sorted(
         dados.items(),
         key=lambda x: next((i for i, (cargo, _, _) in enumerate(HIERARQUIA_CARGOS) if cargo == x[1].get('cargo', 'Sem cargo')), len(HIERARQUIA_CARGOS))
@@ -296,7 +330,6 @@ async def relatorio_por_cargo(ctx):
         await ctx.send(embed=embed)
         return
     
-    # Agrupa por cargo seguindo a hierarquia
     por_cargo = {cargo: [] for cargo, _, _ in HIERARQUIA_CARGOS}
     
     for user_id, user_data in dados.items():
@@ -347,7 +380,6 @@ async def oficiais_em_servico(ctx):
         await ctx.send(embed=embed)
         return
     
-    # Ordena por hierarquia
     em_servico_ordenado = sorted(
         em_servico,
         key=lambda x: next((i for i, (cargo, _, _) in enumerate(HIERARQUIA_CARGOS) if cargo == x.get('cargo', 'Sem cargo')), len(HIERARQUIA_CARGOS))
@@ -393,18 +425,15 @@ async def ajuda(ctx):
         color=discord.Color.blue()
     )
     
-    # Bate-Ponto
     embed.add_field(
         name='**🕐 Bate-Ponto**',
         value=
-        '`!bater_ponto` - Registra entrada em serviço\n'
-        '`!sair_servico` - Registra saída de serviço\n'
+        '`!bater_ponto` - Mostra botões para entrar/sair de serviço\n'
         '`!meu_bate_ponto` - Mostra seu histórico\n'
         '`!oficiais_em_servico` - Lista quem está em serviço',
         inline=False
     )
     
-    # Admin
     embed.add_field(
         name='**🛡️ Comandos Admin**',
         value=
@@ -413,7 +442,6 @@ async def ajuda(ctx):
         inline=False
     )
     
-    # Utilitários
     embed.add_field(
         name='**⚙️ Utilitários**',
         value=
@@ -423,7 +451,7 @@ async def ajuda(ctx):
         inline=False
     )
     
-    embed.set_footer(text='Hierarquia: Coronel > Tenente Coronel > Major > Capitão > Tenentes > Aspirante > Sub Tenente > Sargentos > Cabo > Soldado > Recruta')
+    embed.set_footer(text='Clique nos botões para entrar e sair de serviço!')
     
     await ctx.send(embed=embed)
 

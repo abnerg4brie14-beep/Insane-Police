@@ -11,23 +11,24 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 
 # Arquivo para armazenar dados de bate-ponto
 DATA_FILE = 'bate_ponto_data.json'
+PANEL_FILE = 'panel_data.json'
 
 # Hierarquia de cargos
 HIERARQUIA_CARGOS = [
-    ("Coronel", discord.Color.gold()),
-    ("Tenente coronel", discord.Color.gold()),
-    ("Major", discord.Color.gold()),
-    ("Capitão", discord.Color.orange()),
-    ("1 tenente", discord.Color.orange()),
-    ("2 tenente", discord.Color.orange()),
-    ("Aspirante oficial", discord.Color.from_rgb(200, 200, 200)),
-    ("Sub tenente", discord.Color.from_rgb(150, 150, 150)),
-    ("1 sargento", discord.Color.from_rgb(100, 100, 100)),
-    ("2 sargento", discord.Color.from_rgb(100, 100, 100)),
-    ("3 sargento", discord.Color.from_rgb(100, 100, 100)),
-    ("Cabo", discord.Color.blue()),
-    ("Soldado", discord.Color.blue()),
-    ("Recruta", discord.Color.light_grey()),
+    ("Coronel", discord.Color.from_rgb(200, 0, 0)),
+    ("Tenente coronel", discord.Color.from_rgb(200, 0, 0)),
+    ("Major", discord.Color.from_rgb(200, 0, 0)),
+    ("Capitão", discord.Color.from_rgb(255, 0, 0)),
+    ("1 tenente", discord.Color.from_rgb(255, 0, 0)),
+    ("2 tenente", discord.Color.from_rgb(255, 0, 0)),
+    ("Aspirante oficial", discord.Color.from_rgb(100, 100, 100)),
+    ("Sub tenente", discord.Color.from_rgb(100, 100, 100)),
+    ("1 sargento", discord.Color.from_rgb(50, 50, 50)),
+    ("2 sargento", discord.Color.from_rgb(50, 50, 50)),
+    ("3 sargento", discord.Color.from_rgb(50, 50, 50)),
+    ("Cabo", discord.Color.from_rgb(70, 70, 70)),
+    ("Soldado", discord.Color.from_rgb(80, 80, 80)),
+    ("Recruta", discord.Color.from_rgb(60, 60, 60)),
 ]
 
 CARGO_COR = {cargo: cor for cargo, cor in HIERARQUIA_CARGOS}
@@ -44,6 +45,18 @@ def salvar_dados(dados):
     with open(DATA_FILE, 'w', encoding='utf-8') as f:
         json.dump(dados, f, ensure_ascii=False, indent=2)
 
+def carregar_panel_dados():
+    """Carrega dados do painel"""
+    if os.path.exists(PANEL_FILE):
+        with open(PANEL_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {}
+
+def salvar_panel_dados(dados):
+    """Salva dados do painel"""
+    with open(PANEL_FILE, 'w', encoding='utf-8') as f:
+        json.dump(dados, f, ensure_ascii=False, indent=2)
+
 def obter_cargo_usuario(member):
     """Obtém o cargo principal do usuário"""
     if not member.roles:
@@ -55,7 +68,87 @@ def obter_cargo_usuario(member):
 
 def obter_cor_cargo(cargo):
     """Retorna a cor do cargo"""
-    return CARGO_COR.get(cargo, discord.Color.default())
+    return CARGO_COR.get(cargo, discord.Color.from_rgb(100, 100, 100))
+
+async def atualizar_painel(bot):
+    """Atualiza o painel fixo com os oficiais em serviço"""
+    panel_dados = carregar_panel_dados()
+    
+    if not panel_dados:
+        return
+    
+    for server_id, canal_id in panel_dados.items():
+        try:
+            servidor = bot.get_guild(int(server_id))
+            if not servidor:
+                continue
+            
+            canal = servidor.get_channel(int(canal_id))
+            if not canal:
+                continue
+            
+            # Buscar a mensagem do painel
+            async for msg in canal.history(limit=10):
+                if msg.author == bot.user and "OFICIAIS EM SERVICO" in msg.embeds[0].title if msg.embeds else False:
+                    # Gerar novo conteúdo
+                    dados = carregar_dados()
+                    
+                    em_servico = []
+                    for user_id, user_data in dados.items():
+                        registros = user_data['registros']
+                        if registros and registros[-1].get('saida') is None:
+                            em_servico.append(user_data)
+                    
+                    # Ordenar por hierarquia
+                    em_servico_ordenado = sorted(
+                        em_servico,
+                        key=lambda x: next((i for i, (cargo, _) in enumerate(HIERARQUIA_CARGOS) if cargo == x.get('cargo', 'Sem cargo')), len(HIERARQUIA_CARGOS))
+                    )
+                    
+                    # Criar embed decorado
+                    embed = discord.Embed(
+                        title="OFICIAIS EM SERVICO - PMC",
+                        color=discord.Color.from_rgb(139, 0, 0)
+                    )
+                    
+                    embed.add_field(name="Total em Servico", value=f"{len(em_servico_ordenado)} pessoa(s)", inline=False)
+                    embed.add_field(name="=" * 50, value="", inline=False)
+                    
+                    if em_servico_ordenado:
+                        contador = 1
+                        for user_data in em_servico_ordenado:
+                            cargo = user_data.get('cargo', 'Sem cargo')
+                            registros = user_data['registros']
+                            entrada = registros[-1]['entrada']
+                            
+                            # Calcula tempo em serviço
+                            try:
+                                entrada_dt = datetime.strptime(entrada, '%d/%m/%Y %H:%M:%S')
+                                agora = datetime.now()
+                                duracao = agora - entrada_dt
+                                horas = duracao.seconds // 3600
+                                minutos = (duracao.seconds % 3600) // 60
+                                tempo_texto = f"{horas}h {minutos}min"
+                            except:
+                                tempo_texto = "Tempo indisponivel"
+                            
+                            embed.add_field(
+                                name=f"{contador}. {user_data['nome']} - {cargo}",
+                                value=f"Entrada: {entrada}\nTempo em Servico: {tempo_texto}",
+                                inline=False
+                            )
+                            contador += 1
+                    else:
+                        embed.add_field(name="Nenhum oficial em servico", value="", inline=False)
+                    
+                    embed.add_field(name="=" * 50, value="", inline=False)
+                    embed.set_footer(text="Painel atualizado em tempo real")
+                    embed.color = discord.Color.from_rgb(139, 0, 0)  # Vermelho escuro
+                    
+                    await msg.edit(embed=embed)
+                    break
+        except Exception as e:
+            print(f"Erro ao atualizar painel: {e}")
 
 # Criar instância do bot
 intents = discord.Intents.default()
@@ -67,11 +160,10 @@ class BaterPontoView(discord.ui.View):
     def __init__(self, ctx):
         super().__init__()
         self.ctx = ctx
-        self.timeout = 300  # 5 minutos
+        self.timeout = 300
 
     @discord.ui.button(label="BATER PONTO", style=discord.ButtonStyle.green)
     async def bater_ponto_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Verificar se quem clicou é o mesmo que pediu
         if interaction.user != self.ctx.author:
             await interaction.response.send_message("Apenas quem pediu pode usar este botao!", ephemeral=True)
             return
@@ -108,6 +200,7 @@ class BaterPontoView(discord.ui.View):
         })
         
         salvar_dados(dados)
+        await atualizar_painel(bot)
         
         embed = discord.Embed(
             title='Entrada Registrada',
@@ -122,7 +215,6 @@ class BaterPontoView(discord.ui.View):
 
     @discord.ui.button(label="SAIR DO SERVICO", style=discord.ButtonStyle.red)
     async def sair_servico_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Verificar se quem clicou é o mesmo que pediu
         if interaction.user != self.ctx.author:
             await interaction.response.send_message("Apenas quem pediu pode usar este botao!", ephemeral=True)
             return
@@ -156,6 +248,7 @@ class BaterPontoView(discord.ui.View):
         dados[user_id]['cargo'] = cargo
         
         salvar_dados(dados)
+        await atualizar_painel(bot)
         
         try:
             entrada_dt = datetime.strptime(entrada, '%d/%m/%Y %H:%M:%S')
@@ -215,6 +308,38 @@ async def sair_servico(ctx):
     embed.add_field(name='SAIR DO SERVICO', value='Clique para sair de servico', inline=False)
     
     await ctx.send(embed=embed, view=view)
+
+@bot.command(name='criar_painel')
+@commands.has_permissions(administrator=True)
+async def criar_painel(ctx):
+    """Cria o painel fixo de oficiais em serviço"""
+    
+    # Salvar dados do painel
+    panel_dados = carregar_panel_dados()
+    panel_dados[str(ctx.guild.id)] = str(ctx.channel.id)
+    salvar_panel_dados(panel_dados)
+    
+    # Criar embed do painel
+    embed = discord.Embed(
+        title="OFICIAIS EM SERVICO - PMC",
+        color=discord.Color.from_rgb(139, 0, 0)
+    )
+    
+    embed.add_field(name="Total em Servico", value="0 pessoa(s)", inline=False)
+    embed.add_field(name="=" * 50, value="", inline=False)
+    embed.add_field(name="Nenhum oficial em servico", value="", inline=False)
+    embed.add_field(name="=" * 50, value="", inline=False)
+    embed.set_footer(text="Painel atualizado em tempo real")
+    
+    await ctx.send(embed=embed)
+    
+    # Confirmar criação
+    confirmacao = discord.Embed(
+        title="Painel Criado",
+        description="O painel fixo foi criado com sucesso neste canal!",
+        color=discord.Color.green()
+    )
+    await ctx.send(embed=confirmacao)
 
 @bot.command(name='meu_bate_ponto')
 async def meu_bate_ponto(ctx):
@@ -353,7 +478,7 @@ async def relatorio_por_cargo(ctx):
 
 @bot.command(name='oficiais_em_servico')
 async def oficiais_em_servico(ctx):
-    """Mostra quem está em serviço no momento - estilo PMC"""
+    """Mostra quem está em serviço no momento"""
     dados = carregar_dados()
     
     em_servico = []
@@ -371,40 +496,38 @@ async def oficiais_em_servico(ctx):
         await ctx.send(embed=embed)
         return
     
-    # Ordena por hierarquia
     em_servico_ordenado = sorted(
         em_servico,
         key=lambda x: next((i for i, (cargo, _) in enumerate(HIERARQUIA_CARGOS) if cargo == x.get('cargo', 'Sem cargo')), len(HIERARQUIA_CARGOS))
     )
     
-    # Criar painel em estilo PMC
-    painel = "Oficiais em Servico - PMC\n"
-    painel += "=" * 50 + "\n\n"
+    embed = discord.Embed(
+        title=f'Oficiais em Servico ({len(em_servico_ordenado)})',
+        color=discord.Color.from_rgb(139, 0, 0)
+    )
     
     for user_data in em_servico_ordenado:
         cargo = user_data.get('cargo', 'Sem cargo')
         registros = user_data['registros']
         entrada = registros[-1]['entrada']
         
-        # Calcula tempo em serviço
         try:
             entrada_dt = datetime.strptime(entrada, '%d/%m/%Y %H:%M:%S')
             agora = datetime.now()
             duracao = agora - entrada_dt
             horas = duracao.seconds // 3600
             minutos = (duracao.seconds % 3600) // 60
-            tempo_texto = f"{horas}h {minutos}min em servico"
+            tempo_texto = f"{horas}h {minutos}min"
         except:
             tempo_texto = "Tempo indisponivel"
         
-        painel += f"Nome: {user_data['nome']}\n"
-        painel += f"Cargo: {cargo}\n"
-        painel += f"Entrada: {entrada}\n"
-        painel += f"Status: {tempo_texto}\n"
-        painel += "-" * 50 + "\n"
+        embed.add_field(
+            name=f"{user_data['nome']} - {cargo}",
+            value=f"Entrada: {entrada}\nTempo: {tempo_texto}",
+            inline=False
+        )
     
-    # Enviar em código formatado
-    await ctx.send(f"```\n{painel}\n```")
+    await ctx.send(embed=embed)
 
 # ===== COMANDOS UTILITÁRIOS =====
 @bot.command(name='ping')
@@ -436,6 +559,13 @@ async def ajuda(ctx):
     )
     
     embed.add_field(
+        name='Painel',
+        value=
+        '!criar_painel - Cria painel fixo (admin)',
+        inline=False
+    )
+    
+    embed.add_field(
         name='Comandos Admin',
         value=
         '!relatorio_ponto - Relatorio geral (admin)\n'
@@ -451,8 +581,6 @@ async def ajuda(ctx):
         '!cargos - Mostra a hierarquia',
         inline=False
     )
-    
-    embed.set_footer(text='Clique nos botoes para entrar e sair de servico!')
     
     await ctx.send(embed=embed)
 
